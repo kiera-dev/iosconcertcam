@@ -22,7 +22,9 @@ enum AudioMode: String, CaseIterable, Identifiable {
     }
 }
 
-final class CameraManager: NSObject, ObservableObject {
+// @unchecked Sendable: all mutable state is confined to sessionQueue or the
+// main queue; @Published properties are only written via DispatchQueue.main.
+final class CameraManager: NSObject, ObservableObject, @unchecked Sendable {
     @Published var isAuthorized = false
     @Published var isRecording = false
     @Published var recordingSeconds = 0
@@ -109,10 +111,17 @@ final class CameraManager: NSObject, ObservableObject {
     func setAudioMode(_ mode: AudioMode) {
         guard !isRecording else { return }
         audioMode = mode
+        // Restart the session around the switch: changing the AVAudioSession
+        // category/mode under a running capture session can silently kill
+        // audio capture, and automaticallyConfiguresApplicationAudioSession
+        // only takes effect on session start.
         sessionQueue.async {
+            let wasRunning = self.session.isRunning
+            if wasRunning { self.session.stopRunning() }
             self.session.beginConfiguration()
             self.applyAudioMode(mode)
             self.session.commitConfiguration()
+            if wasRunning { self.session.startRunning() }
         }
     }
 
@@ -122,6 +131,9 @@ final class CameraManager: NSObject, ObservableObject {
 
         switch mode {
         case .stereo:
+            // Undo a previous Raw configuration so the capture session can
+            // reclaim control of the audio session.
+            try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
             session.automaticallyConfiguresApplicationAudioSession = true
             if audioInput.isMultichannelAudioModeSupported(.stereo) {
                 audioInput.multichannelAudioMode = .stereo
@@ -208,7 +220,12 @@ final class CameraManager: NSObject, ObservableObject {
     }
 
     private func report(_ message: String) {
-        DispatchQueue.main.async { self.statusMessage = message }
+        DispatchQueue.main.async {
+            self.statusMessage = message
+            DispatchQueue.main.asyncAfter(deadline: .now() + 4) {
+                if self.statusMessage == message { self.statusMessage = nil }
+            }
+        }
     }
 }
 
