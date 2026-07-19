@@ -76,7 +76,10 @@ struct ContentView: View {
             }
 
             if camera.isAuthorized, let deviation = horizon.deviation {
+                // Follow the device like the icons do, so the line tracks the
+                // real-world horizon in landscape grips too.
                 horizonLine(deviation: deviation)
+                    .rotationEffect(iconRotation)
             }
 
             if let point = focusPoint, focusBoxVisible {
@@ -148,7 +151,7 @@ struct ContentView: View {
             Rectangle()
                 .frame(width: isLevel ? 200 : 110, height: 1.5)
                 .foregroundStyle(isLevel ? .yellow : .white.opacity(0.85))
-                .rotationEffect(.degrees(isLevel ? 0 : deviation))
+                .rotationEffect(.degrees(isLevel ? 0 : -deviation))
         }
         .animation(.easeOut(duration: 0.15), value: isLevel)
         .allowsHitTesting(false)
