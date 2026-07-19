@@ -115,9 +115,10 @@ struct ContentView: View {
 
     private var topBar: some View {
         VStack(spacing: 6) {
-            HStack {
+            HStack(spacing: 10) {
                 qualityMenu
                 Spacer()
+                windRemovalButton
                 nightModeButton
             }
             .padding(.horizontal, 16)
@@ -140,9 +141,9 @@ struct ContentView: View {
                     }
                 }
                 .pickerStyle(.segmented)
-                .frame(maxWidth: 240)
+                .frame(maxWidth: 300)
 
-                Text(camera.audioMode.footnote)
+                Text(audioFootnote)
                     .font(.caption2)
                     .foregroundStyle(.white.opacity(0.8))
                     .padding(.horizontal, 10).padding(.vertical, 4)
@@ -232,6 +233,36 @@ struct ContentView: View {
         .disabled(!camera.isNightModeSupported || camera.isRecording)
         .opacity(camera.isNightModeSupported ? 1 : 0.35)
         .rotationEffect(iconRotation)
+    }
+
+    /// Wind-noise removal requires the multichannel audio path, so it's
+    /// grayed out in Raw mode; AudioZoom mode locks it on.
+    private var windRemovalButton: some View {
+        let effectivelyOn = camera.audioMode == .audioZoom
+            || (camera.audioMode == .stereo && camera.isWindRemovalOn)
+        return Button {
+            camera.setWindRemoval(!camera.isWindRemovalOn)
+        } label: {
+            Image(systemName: "wind")
+                .font(.system(size: 17, weight: .semibold))
+                .foregroundStyle(effectivelyOn ? .cyan : .white)
+                .frame(width: 36, height: 36)
+                .background(.black.opacity(0.5), in: Circle())
+        }
+        .disabled(camera.audioMode != .stereo || camera.isRecording)
+        .opacity(camera.audioMode == .raw ? 0.35 : 1)
+        .rotationEffect(iconRotation)
+    }
+
+    private var audioFootnote: String {
+        switch camera.audioMode {
+        case .stereo:
+            return "Stereo · audio zoom off · wind removal \(camera.isWindRemovalOn ? "ON" : "off")"
+        case .raw:
+            return "Mono · system audio processing bypassed"
+        case .audioZoom:
+            return "Stereo · beam follows your zoom · wind ON"
+        }
     }
 
     // MARK: - Bottom controls

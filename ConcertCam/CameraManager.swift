@@ -11,15 +11,12 @@ enum AudioMode: String, CaseIterable, Identifiable {
     /// bypasses Apple's software processing chain (auto gain, EQ, limiting).
     /// The most faithful option at very loud shows.
     case raw = "Raw"
+    /// Stereo with audio zoom and wind removal deliberately ON: the beam
+    /// narrows toward whatever the camera is pointed at, attenuating nearby
+    /// crowd noise (and off-key neighbors).
+    case audioZoom = "AudioZoom"
 
     var id: String { rawValue }
-
-    var footnote: String {
-        switch self {
-        case .stereo: return "Stereo · audio zoom off · wind removal off"
-        case .raw: return "Mono · system audio processing bypassed"
-        }
-    }
 }
 
 struct VideoQuality: Equatable, Identifiable {
@@ -62,6 +59,8 @@ final class CameraManager: NSObject, ObservableObject, @unchecked Sendable {
     @Published var statusMessage: String?
     /// Microphone input level, 0...1 (mapped from -50...0 dBFS).
     @Published var audioLevel: Float = 0
+    /// Wind-noise removal (Stereo mode only — requires multichannel audio).
+    @Published var isWindRemovalOn = false
 
     let session = AVCaptureSession()
     let previewLayer = AVCaptureVideoPreviewLayer()
@@ -85,6 +84,7 @@ final class CameraManager: NSObject, ObservableObject, @unchecked Sendable {
            let mode = AudioMode(rawValue: saved) {
             audioMode = mode
         }
+        isWindRemovalOn = UserDefaults.standard.bool(forKey: "windRemoval")
     }
 
     // MARK: - Setup
@@ -193,7 +193,7 @@ final class CameraManager: NSObject, ObservableObject, @unchecked Sendable {
         guard let audioInput else { return }
 
         switch mode {
-        case .stereo:
+        case .stereo, .audioZoom:
             // Undo a previous Raw configuration so the capture session can
             // reclaim control of the audio session.
             try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
@@ -202,10 +202,10 @@ final class CameraManager: NSObject, ObservableObject, @unchecked Sendable {
                 audioInput.multichannelAudioMode = .stereo
             }
             if audioInput.isWindNoiseRemovalSupported {
-                audioInput.isWindNoiseRemovalEnabled = false
+                audioInput.isWindNoiseRemovalEnabled = mode == .audioZoom || isWindRemovalOn
             }
             if #available(iOS 26.4, *), audioInput.isAudioZoomSupported {
-                audioInput.isAudioZoomEnabled = false
+                audioInput.isAudioZoomEnabled = mode == .audioZoom
             }
         case .raw:
             // Audio zoom, wind removal, and stereo rendering only apply when
@@ -219,6 +219,19 @@ final class CameraManager: NSObject, ObservableObject, @unchecked Sendable {
             } catch {
                 report("Couldn't switch to raw audio: \(error.localizedDescription)")
             }
+        }
+    }
+
+    func setWindRemoval(_ on: Bool) {
+        isWindRemovalOn = on
+        UserDefaults.standard.set(on, forKey: "windRemoval")
+        sessionQueue.async {
+            guard let audioInput = self.audioInput,
+                  audioInput.isWindNoiseRemovalSupported,
+                  audioInput.multichannelAudioMode != .none else { return }
+            self.session.beginConfiguration()
+            audioInput.isWindNoiseRemovalEnabled = on
+            self.session.commitConfiguration()
         }
     }
 
