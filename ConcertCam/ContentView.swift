@@ -30,6 +30,7 @@ struct ContentView: View {
     @State private var focusBoxVisible = false
     @State private var pinchBaseZoom: CGFloat?
     @State private var iconRotation: Angle = .zero
+    @State private var deviceIsLandscape = false
 
     var body: some View {
         ZStack {
@@ -82,7 +83,10 @@ struct ContentView: View {
             default: angle = nil // face up/down — keep current rotation
             }
             if let angle {
-                withAnimation(.easeInOut(duration: 0.3)) { iconRotation = angle }
+                withAnimation(.easeInOut(duration: 0.3)) {
+                    iconRotation = angle
+                    deviceIsLandscape = abs(angle.degrees) == 90
+                }
             }
         }
     }
@@ -145,6 +149,19 @@ struct ContentView: View {
                     .background(.black.opacity(0.5), in: Capsule())
             }
 
+            if camera.isAuthorized {
+                micMeter
+            }
+
+            if camera.isAuthorized && !deviceIsLandscape {
+                Label("Rotate for YouTube", systemImage: "iphone.landscape")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(camera.isRecording ? .white : .white.opacity(0.9))
+                    .padding(.horizontal, 10).padding(.vertical, 4)
+                    .background(camera.isRecording ? .red.opacity(0.85) : .black.opacity(0.5),
+                                in: Capsule())
+            }
+
             if let message = camera.statusMessage {
                 Text(message)
                     .font(.caption)
@@ -154,6 +171,29 @@ struct ContentView: View {
             }
         }
         .padding(.top, 8)
+    }
+
+    /// Live mic level. If this stops moving — or drops when you grip the
+    /// phone — a mic port is covered.
+    private var micMeter: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "mic.fill")
+                .font(.system(size: 9))
+                .foregroundStyle(.white.opacity(0.8))
+            GeometryReader { geo in
+                ZStack(alignment: .leading) {
+                    Capsule().fill(.white.opacity(0.25))
+                    Capsule()
+                        .fill(camera.audioLevel > 0.92 ? .red
+                              : camera.audioLevel > 0.75 ? .yellow : .green)
+                        .frame(width: geo.size.width * CGFloat(camera.audioLevel))
+                        .animation(.linear(duration: 0.1), value: camera.audioLevel)
+                }
+            }
+            .frame(width: 110, height: 4)
+        }
+        .padding(.horizontal, 10).padding(.vertical, 5)
+        .background(.black.opacity(0.5), in: Capsule())
     }
 
     private var qualityMenu: some View {

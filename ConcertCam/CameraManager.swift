@@ -60,6 +60,8 @@ final class CameraManager: NSObject, ObservableObject, @unchecked Sendable {
     @Published var isNightModeOn = false
     @Published var isNightModeSupported = false
     @Published var statusMessage: String?
+    /// Microphone input level, 0...1 (mapped from -50...0 dBFS).
+    @Published var audioLevel: Float = 0
 
     let session = AVCaptureSession()
     let previewLayer = AVCaptureVideoPreviewLayer()
@@ -71,6 +73,7 @@ final class CameraManager: NSObject, ObservableObject, @unchecked Sendable {
     private var rotationCoordinator: AVCaptureDevice.RotationCoordinator?
     private var rotationObservation: NSKeyValueObservation?
     private var recordingTimer: Timer?
+    private var levelTimer: Timer?
     /// Accessed on sessionQueue only.
     private var activeQuality: VideoQuality?
 
@@ -148,6 +151,21 @@ final class CameraManager: NSObject, ObservableObject, @unchecked Sendable {
         refreshZoomCaps()
         setUpRotationCoordinator(for: camera)
         session.startRunning()
+        startLevelMetering()
+    }
+
+    /// Polls the movie output's audio channels so the UI can show a live mic
+    /// meter — the practical way to spot a covered mic port or clipping.
+    private func startLevelMetering() {
+        DispatchQueue.main.async {
+            self.levelTimer?.invalidate()
+            self.levelTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] _ in
+                guard let self else { return }
+                let channels = self.movieOutput.connection(with: .audio)?.audioChannels ?? []
+                let peakDb = channels.map(\.averagePowerLevel).max() ?? -160
+                self.audioLevel = max(0, min(1, (peakDb + 50) / 50))
+            }
+        }
     }
 
     // MARK: - Audio configuration
