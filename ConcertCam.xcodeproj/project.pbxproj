@@ -13,7 +13,7 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
-		3D5ED982926620B3D86B9AEC /* ConcertCam.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = ConcertCam.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		3D5ED982926620B3D86B9AEC /* ConcertCam.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = ConcertCam.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		8444A89F283ACFB8179282B5 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
 		989CEF540663A61D4C7B5BEA /* CameraManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CameraManager.swift; sourceTree = "<group>"; };
 		A911AD5969BD9219DD911918 /* ConcertCamApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConcertCamApp.swift; sourceTree = "<group>"; };
@@ -182,14 +182,13 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				CODE_SIGN_STYLE = Automatic;
-				DEVELOPMENT_TEAM = 766N3F8252;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_NSCameraUsageDescription = "ConcertCam needs the camera to record video.";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "ConcertCam needs the microphone to record concert audio without processing.";
 				INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription = "ConcertCam saves your recordings to your photo library.";
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				INFOPLIST_KEY_UIStatusBarHidden = YES;
-				INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations = UIInterfaceOrientationPortrait;
 				INFOPLIST_KEY_UIViewControllerBasedStatusBarAppearance = NO;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -208,14 +207,13 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				CODE_SIGN_STYLE = Automatic;
-				DEVELOPMENT_TEAM = 766N3F8252;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_NSCameraUsageDescription = "ConcertCam needs the camera to record video.";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "ConcertCam needs the microphone to record concert audio without processing.";
 				INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription = "ConcertCam saves your recordings to your photo library.";
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				INFOPLIST_KEY_UIStatusBarHidden = YES;
-				INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations = UIInterfaceOrientationPortrait;
 				INFOPLIST_KEY_UIViewControllerBasedStatusBarAppearance = NO;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",

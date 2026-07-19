@@ -49,6 +49,7 @@ struct ZoomPreset: Equatable, Identifiable {
 final class CameraManager: NSObject, ObservableObject, @unchecked Sendable {
     @Published var isAuthorized = false
     @Published var isRecording = false
+    @Published var isPaused = false
     @Published var recordingSeconds = 0
     @Published var zoomFactor: CGFloat = 1.0
     @Published var maxZoom: CGFloat = 1.0
@@ -411,6 +412,17 @@ final class CameraManager: NSObject, ObservableObject, @unchecked Sendable {
         }
     }
 
+    func togglePause() {
+        sessionQueue.async {
+            guard self.movieOutput.isRecording else { return }
+            if self.movieOutput.isRecordingPaused {
+                self.movieOutput.resumeRecording()
+            } else {
+                self.movieOutput.pauseRecording()
+            }
+        }
+    }
+
     private func report(_ message: String) {
         DispatchQueue.main.async {
             self.statusMessage = message
@@ -427,14 +439,24 @@ extension CameraManager: AVCaptureFileOutputRecordingDelegate {
             self.isRecording = true
             self.recordingSeconds = 0
             self.recordingTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
-                self?.recordingSeconds += 1
+                guard let self, !self.isPaused else { return }
+                self.recordingSeconds += 1
             }
         }
+    }
+
+    func fileOutput(_ output: AVCaptureFileOutput, didPauseRecordingTo fileURL: URL, from connections: [AVCaptureConnection]) {
+        DispatchQueue.main.async { self.isPaused = true }
+    }
+
+    func fileOutput(_ output: AVCaptureFileOutput, didResumeRecordingTo fileURL: URL, from connections: [AVCaptureConnection]) {
+        DispatchQueue.main.async { self.isPaused = false }
     }
 
     func fileOutput(_ output: AVCaptureFileOutput, didFinishRecordingTo outputFileURL: URL, from connections: [AVCaptureConnection], error: Error?) {
         DispatchQueue.main.async {
             self.isRecording = false
+            self.isPaused = false
             self.recordingTimer?.invalidate()
             self.recordingTimer = nil
         }

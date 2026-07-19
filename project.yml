@@ -15,7 +15,7 @@ targets:
         TARGETED_DEVICE_FAMILY: "1"
         SWIFT_VERSION: "5.0"
         INFOPLIST_KEY_UILaunchScreen_Generation: YES
-        INFOPLIST_KEY_UISupportedInterfaceOrientations: "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight"
+        INFOPLIST_KEY_UISupportedInterfaceOrientations: "UIInterfaceOrientationPortrait"
         INFOPLIST_KEY_NSCameraUsageDescription: "ConcertCam needs the camera to record video."
         INFOPLIST_KEY_NSMicrophoneUsageDescription: "ConcertCam needs the microphone to record concert audio without processing."
         INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription: "ConcertCam saves your recordings to your photo library."

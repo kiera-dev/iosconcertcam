@@ -29,6 +29,7 @@ struct ContentView: View {
     @State private var focusPoint: CGPoint?
     @State private var focusBoxVisible = false
     @State private var pinchBaseZoom: CGFloat?
+    @State private var iconRotation: Angle = .zero
 
     var body: some View {
         ZStack {
@@ -65,7 +66,25 @@ struct ContentView: View {
             }
         }
         .statusBarHidden()
-        .onAppear { camera.start() }
+        .onAppear {
+            camera.start()
+            UIDevice.current.beginGeneratingDeviceOrientationNotifications()
+        }
+        // The UI is portrait-locked (like the stock camera); circular controls
+        // rotate in place to follow the device instead.
+        .onReceive(NotificationCenter.default.publisher(for: UIDevice.orientationDidChangeNotification)) { _ in
+            let angle: Angle?
+            switch UIDevice.current.orientation {
+            case .portrait: angle = .zero
+            case .landscapeLeft: angle = .degrees(90)
+            case .landscapeRight: angle = .degrees(-90)
+            case .portraitUpsideDown: angle = .degrees(180)
+            default: angle = nil // face up/down — keep current rotation
+            }
+            if let angle {
+                withAnimation(.easeInOut(duration: 0.3)) { iconRotation = angle }
+            }
+        }
     }
 
     // MARK: - Gestures
@@ -100,9 +119,11 @@ struct ContentView: View {
             .padding(.horizontal, 16)
 
             if camera.isRecording {
-                Label(timeString(camera.recordingSeconds), systemImage: "record.circle")
+                Label(camera.isPaused ? "PAUSED · \(timeString(camera.recordingSeconds))"
+                                      : timeString(camera.recordingSeconds),
+                      systemImage: camera.isPaused ? "pause.circle" : "record.circle")
                     .font(.system(.headline, design: .monospaced))
-                    .foregroundStyle(.red)
+                    .foregroundStyle(camera.isPaused ? .yellow : .red)
                     .padding(.horizontal, 12).padding(.vertical, 6)
                     .background(.black.opacity(0.5), in: Capsule())
             } else {
@@ -170,6 +191,7 @@ struct ContentView: View {
         }
         .disabled(!camera.isNightModeSupported || camera.isRecording)
         .opacity(camera.isNightModeSupported ? 1 : 0.35)
+        .rotationEffect(iconRotation)
     }
 
     // MARK: - Bottom controls
@@ -188,25 +210,43 @@ struct ContentView: View {
                                 .foregroundStyle(isActive ? .yellow : .white)
                                 .frame(width: isActive ? 40 : 34, height: isActive ? 40 : 34)
                                 .background(.black.opacity(0.5), in: Circle())
+                                .rotationEffect(iconRotation)
                         }
                     }
                 }
                 .animation(.easeOut(duration: 0.15), value: camera.zoomFactor)
             }
 
-            Button(action: camera.toggleRecording) {
-                ZStack {
-                    Circle()
-                        .strokeBorder(.white, lineWidth: 4)
-                        .frame(width: 76, height: 76)
-                    RoundedRectangle(cornerRadius: camera.isRecording ? 6 : 32)
-                        .fill(.red)
-                        .frame(width: camera.isRecording ? 32 : 64,
-                               height: camera.isRecording ? 32 : 64)
-                        .animation(.easeInOut(duration: 0.2), value: camera.isRecording)
+            ZStack {
+                Button(action: camera.toggleRecording) {
+                    ZStack {
+                        Circle()
+                            .strokeBorder(.white, lineWidth: 4)
+                            .frame(width: 76, height: 76)
+                        RoundedRectangle(cornerRadius: camera.isRecording ? 6 : 32)
+                            .fill(.red)
+                            .frame(width: camera.isRecording ? 32 : 64,
+                                   height: camera.isRecording ? 32 : 64)
+                            .animation(.easeInOut(duration: 0.2), value: camera.isRecording)
+                    }
+                }
+                .disabled(!camera.isAuthorized)
+
+                if camera.isRecording {
+                    HStack {
+                        Spacer()
+                        Button(action: camera.togglePause) {
+                            Image(systemName: camera.isPaused ? "play.fill" : "pause.fill")
+                                .font(.system(size: 20, weight: .bold))
+                                .foregroundStyle(camera.isPaused ? .yellow : .white)
+                                .frame(width: 54, height: 54)
+                                .background(.black.opacity(0.5), in: Circle())
+                        }
+                        .rotationEffect(iconRotation)
+                    }
+                    .frame(width: 250)
                 }
             }
-            .disabled(!camera.isAuthorized)
         }
         .padding(.bottom, 24)
     }
