@@ -203,6 +203,19 @@ struct ContentView: View {
                     .foregroundStyle(.white.opacity(0.8))
                     .padding(.horizontal, 10).padding(.vertical, 4)
                     .background(.black.opacity(0.5), in: Capsule())
+
+                if camera.audioMode == .raw && camera.rawMicOptions.count > 1 {
+                    Picker("Mic", selection: Binding(
+                        get: { camera.rawMic },
+                        set: { camera.setRawMic($0) }
+                    )) {
+                        ForEach(camera.rawMicOptions) { mic in
+                            Text(mic.rawValue).tag(mic)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    .frame(maxWidth: 240)
+                }
             }
 
             if camera.isAuthorized {
@@ -338,7 +351,7 @@ struct ContentView: View {
         case .stereo:
             return "Stereo · audio zoom off · wind removal \(camera.isWindRemovalOn ? "ON" : "off")"
         case .raw:
-            return "Mono · system audio processing bypassed"
+            return "Mono · unprocessed · \(camera.rawMic.rawValue.lowercased()) mic"
         case .audioZoom:
             return "Stereo · beam follows your zoom · wind ON"
         }

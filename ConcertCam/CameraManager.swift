@@ -41,6 +41,24 @@ struct ZoomPreset: Equatable, Identifiable {
     var id: CGFloat { factor }
 }
 
+/// Which physical built-in mic Raw mode records from. The back mic (on the
+/// camera bump) faces the stage while the phone body shadows the crowd.
+enum RawMic: String, CaseIterable, Identifiable {
+    case bottom = "Bottom"
+    case front = "Front"
+    case back = "Back"
+
+    var id: String { rawValue }
+
+    var orientation: AVAudioSession.Orientation {
+        switch self {
+        case .bottom: return .bottom
+        case .front: return .front
+        case .back: return .back
+        }
+    }
+}
+
 /// Steadier modes crop more of the frame and add a little preview latency.
 enum StabilizationMode: String, CaseIterable, Identifiable {
     case off = "Off"
@@ -80,6 +98,8 @@ final class CameraManager: NSObject, ObservableObject, @unchecked Sendable {
     @Published var audioLevel: Float = 0
     /// Wind-noise removal (Stereo mode only — requires multichannel audio).
     @Published var isWindRemovalOn = false
+    @Published var rawMic: RawMic = .bottom
+    @Published var rawMicOptions: [RawMic] = []
     @Published var stabilization: StabilizationMode = .standard
     @Published var stabilizationOptions: [StabilizationMode] = []
 
@@ -111,6 +131,10 @@ final class CameraManager: NSObject, ObservableObject, @unchecked Sendable {
         if let saved = UserDefaults.standard.string(forKey: "stabilization"),
            let mode = StabilizationMode(rawValue: saved) {
             stabilization = mode
+        }
+        if let saved = UserDefaults.standard.string(forKey: "rawMic"),
+           let mic = RawMic(rawValue: saved) {
+            rawMic = mic
         }
     }
 
@@ -239,7 +263,50 @@ final class CameraManager: NSObject, ObservableObject, @unchecked Sendable {
             } catch {
                 report("Couldn't switch to raw audio: \(error.localizedDescription)")
             }
+            refreshRawMicOptions()
+            applyRawMicSelection()
         }
+    }
+
+    // MARK: - Raw mic selection
+
+    func setRawMic(_ mic: RawMic) {
+        guard !isRecording else { return }
+        rawMic = mic
+        UserDefaults.standard.set(mic.rawValue, forKey: "rawMic")
+        sessionQueue.async { self.applyRawMicSelection() }
+    }
+
+    private func builtInMicPort() -> AVAudioSessionPortDescription? {
+        AVAudioSession.sharedInstance().availableInputs?
+            .first { $0.portType == .builtInMic }
+    }
+
+    private func refreshRawMicOptions() {
+        let sources = builtInMicPort()?.dataSources ?? []
+        let options = RawMic.allCases.filter { mic in
+            sources.contains { $0.orientation == mic.orientation }
+        }
+        DispatchQueue.main.async {
+            self.rawMicOptions = options
+            if let first = options.first, !options.contains(self.rawMic) {
+                self.rawMic = first
+            }
+        }
+    }
+
+    /// Routes Raw mode to the chosen physical mic; requests a cardioid
+    /// (directional) pickup pattern when the hardware offers one.
+    private func applyRawMicSelection() {
+        guard audioMode == .raw, let port = builtInMicPort() else { return }
+        let audioSession = AVAudioSession.sharedInstance()
+        try? audioSession.setPreferredInput(port)
+        guard let source = port.dataSources?
+            .first(where: { $0.orientation == rawMic.orientation }) else { return }
+        if let patterns = source.supportedPolarPatterns, patterns.contains(.cardioid) {
+            try? source.setPreferredPolarPattern(.cardioid)
+        }
+        try? port.setPreferredDataSource(source)
     }
 
     // MARK: - Stabilization
