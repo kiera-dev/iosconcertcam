@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(xcodebuild -version)",
+      "WebSearch",
+      "Bash(brew list *)",
+      "Bash(brew install *)",
+      "Bash(xcodegen --version)",
+      "Bash(xcodegen generate *)",
+      "Bash(xcodebuild -project ConcertCam.xcodeproj -scheme ConcertCam -destination 'generic/platform=iOS' CODE_SIGNING_ALLOWED=NO build)"
+    ]
+  }
+}
