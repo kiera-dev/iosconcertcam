@@ -41,6 +41,25 @@ struct ZoomPreset: Equatable, Identifiable {
     var id: CGFloat { factor }
 }
 
+/// Steadier modes crop more of the frame and add a little preview latency.
+enum StabilizationMode: String, CaseIterable, Identifiable {
+    case off = "Off"
+    case standard = "Standard"
+    case cinematic = "Cinematic"
+    case extended = "Extended"
+
+    var id: String { rawValue }
+
+    var avMode: AVCaptureVideoStabilizationMode {
+        switch self {
+        case .off: return .off
+        case .standard: return .standard
+        case .cinematic: return .cinematic
+        case .extended: return .cinematicExtended
+        }
+    }
+}
+
 // @unchecked Sendable: all mutable state is confined to sessionQueue or the
 // main queue; @Published properties are only written via DispatchQueue.main.
 final class CameraManager: NSObject, ObservableObject, @unchecked Sendable {
@@ -61,6 +80,8 @@ final class CameraManager: NSObject, ObservableObject, @unchecked Sendable {
     @Published var audioLevel: Float = 0
     /// Wind-noise removal (Stereo mode only — requires multichannel audio).
     @Published var isWindRemovalOn = false
+    @Published var stabilization: StabilizationMode = .standard
+    @Published var stabilizationOptions: [StabilizationMode] = []
 
     let session = AVCaptureSession()
     let previewLayer = AVCaptureVideoPreviewLayer()
@@ -85,6 +106,10 @@ final class CameraManager: NSObject, ObservableObject, @unchecked Sendable {
             audioMode = mode
         }
         isWindRemovalOn = UserDefaults.standard.bool(forKey: "windRemoval")
+        if let saved = UserDefaults.standard.string(forKey: "stabilization"),
+           let mode = StabilizationMode(rawValue: saved) {
+            stabilization = mode
+        }
     }
 
     // MARK: - Setup
@@ -149,6 +174,7 @@ final class CameraManager: NSObject, ObservableObject, @unchecked Sendable {
         session.commitConfiguration()
 
         refreshZoomCaps()
+        refreshStabilizationOptions()
         setUpRotationCoordinator(for: camera)
         session.startRunning()
         startLevelMetering()
@@ -222,6 +248,28 @@ final class CameraManager: NSObject, ObservableObject, @unchecked Sendable {
         }
     }
 
+    // MARK: - Stabilization
+
+    func setStabilization(_ mode: StabilizationMode) {
+        guard !isRecording else { return }
+        stabilization = mode
+        UserDefaults.standard.set(mode.rawValue, forKey: "stabilization")
+    }
+
+    /// Recomputes which stabilization modes the active format supports.
+    private func refreshStabilizationOptions() {
+        guard let format = videoDevice?.activeFormat else { return }
+        let options = StabilizationMode.allCases.filter {
+            $0 == .off || format.isVideoStabilizationModeSupported($0.avMode)
+        }
+        DispatchQueue.main.async {
+            self.stabilizationOptions = options
+            if !options.contains(self.stabilization) {
+                self.stabilization = options.contains(.standard) ? .standard : .off
+            }
+        }
+    }
+
     func setWindRemoval(_ on: Bool) {
         isWindRemovalOn = on
         UserDefaults.standard.set(on, forKey: "windRemoval")
@@ -244,6 +292,7 @@ final class CameraManager: NSObject, ObservableObject, @unchecked Sendable {
         sessionQueue.async {
             self.applyQuality(newQuality)
             self.refreshZoomCaps()
+            self.refreshStabilizationOptions()
         }
     }
 
@@ -427,7 +476,7 @@ final class CameraManager: NSObject, ObservableObject, @unchecked Sendable {
                     connection.videoRotationAngle = angle
                 }
                 if connection.isVideoStabilizationSupported {
-                    connection.preferredVideoStabilizationMode = .auto
+                    connection.preferredVideoStabilizationMode = self.stabilization.avMode
                 }
             }
             let url = FileManager.default.temporaryDirectory

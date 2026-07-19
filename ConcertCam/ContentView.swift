@@ -1,5 +1,28 @@
 import SwiftUI
 import AVFoundation
+import CoreMotion
+
+/// Publishes how many degrees the phone is rolled away from level
+/// (nil when tilted too far for the indicator to be useful).
+final class HorizonLevel: ObservableObject {
+    @Published var deviation: Double?
+    private let motion = CMMotionManager()
+
+    func start() {
+        guard motion.isDeviceMotionAvailable, !motion.isDeviceMotionActive else { return }
+        motion.deviceMotionUpdateInterval = 1.0 / 30.0
+        motion.startDeviceMotionUpdates(to: .main) { [weak self] deviceMotion, _ in
+            guard let gravity = deviceMotion?.gravity else { return }
+            // Roll of the screen plane relative to gravity, folded to the
+            // nearest 90° so it works in both portrait and landscape grips.
+            let roll = atan2(gravity.x, gravity.y) * 180 / .pi + 180
+            let deviation = roll - (roll / 90).rounded() * 90
+            self?.deviation = abs(deviation) <= 12 ? deviation : nil
+        }
+    }
+
+    func stop() { motion.stopDeviceMotionUpdates() }
+}
 
 struct CameraPreview: UIViewRepresentable {
     let layer: AVCaptureVideoPreviewLayer
@@ -31,6 +54,7 @@ struct ContentView: View {
     @State private var pinchBaseZoom: CGFloat?
     @State private var iconRotation: Angle = .zero
     @State private var deviceIsLandscape = false
+    @StateObject private var horizon = HorizonLevel()
 
     var body: some View {
         ZStack {
@@ -51,6 +75,10 @@ struct ContentView: View {
                     .padding()
             }
 
+            if camera.isAuthorized, let deviation = horizon.deviation {
+                horizonLine(deviation: deviation)
+            }
+
             if let point = focusPoint, focusBoxVisible {
                 RoundedRectangle(cornerRadius: 4)
                     .strokeBorder(.yellow, lineWidth: 1.5)
@@ -69,6 +97,7 @@ struct ContentView: View {
         .statusBarHidden()
         .onAppear {
             camera.start()
+            horizon.start()
             UIDevice.current.beginGeneratingDeviceOrientationNotifications()
         }
         // The UI is portrait-locked (like the stock camera); circular controls
@@ -103,6 +132,28 @@ struct ContentView: View {
             .onEnded { _ in pinchBaseZoom = nil }
     }
 
+    /// Stock-style level: fixed side ticks with a tilting center segment that
+    /// snaps solid yellow when the phone is level.
+    private func horizonLine(deviation: Double) -> some View {
+        let isLevel = abs(deviation) < 1.5
+        return ZStack {
+            HStack {
+                Rectangle().frame(width: 28, height: 1.5)
+                Spacer()
+                Rectangle().frame(width: 28, height: 1.5)
+            }
+            .frame(width: 200)
+            .foregroundStyle(.white.opacity(isLevel ? 0 : 0.5))
+
+            Rectangle()
+                .frame(width: isLevel ? 200 : 110, height: 1.5)
+                .foregroundStyle(isLevel ? .yellow : .white.opacity(0.85))
+                .rotationEffect(.degrees(isLevel ? 0 : deviation))
+        }
+        .animation(.easeOut(duration: 0.15), value: isLevel)
+        .allowsHitTesting(false)
+    }
+
     private func showFocusBox(at point: CGPoint) {
         focusPoint = point
         withAnimation(.easeOut(duration: 0.2)) { focusBoxVisible = true }
@@ -118,6 +169,7 @@ struct ContentView: View {
             HStack(spacing: 10) {
                 qualityMenu
                 Spacer()
+                stabilizationMenu
                 windRemovalButton
                 nightModeButton
             }
@@ -232,6 +284,30 @@ struct ContentView: View {
         }
         .disabled(!camera.isNightModeSupported || camera.isRecording)
         .opacity(camera.isNightModeSupported ? 1 : 0.35)
+        .rotationEffect(iconRotation)
+    }
+
+    private var stabilizationMenu: some View {
+        Menu {
+            ForEach(camera.stabilizationOptions) { option in
+                Button {
+                    camera.setStabilization(option)
+                } label: {
+                    if option == camera.stabilization {
+                        Label(option.rawValue, systemImage: "checkmark")
+                    } else {
+                        Text(option.rawValue)
+                    }
+                }
+            }
+        } label: {
+            Image(systemName: "gyroscope")
+                .font(.system(size: 17, weight: .semibold))
+                .foregroundStyle(camera.stabilization == .off ? .white : .green)
+                .frame(width: 36, height: 36)
+                .background(.black.opacity(0.5), in: Circle())
+        }
+        .disabled(camera.isRecording || camera.stabilizationOptions.isEmpty)
         .rotationEffect(iconRotation)
     }
 
