@@ -87,13 +87,15 @@ final class CameraManager: NSObject, ObservableObject, @unchecked Sendable {
     let previewLayer = AVCaptureVideoPreviewLayer()
 
     private let sessionQueue = DispatchQueue(label: "concertcam.session")
+    private let levelQueue = DispatchQueue(label: "concertcam.audiolevel")
     private let movieOutput = AVCaptureMovieFileOutput()
+    private let audioLevelOutput = AVCaptureAudioDataOutput()
+    private var lastLevelPublish: CFTimeInterval = 0
     private var videoDevice: AVCaptureDevice?
     private var audioInput: AVCaptureDeviceInput?
     private var rotationCoordinator: AVCaptureDevice.RotationCoordinator?
     private var rotationObservation: NSKeyValueObservation?
     private var recordingTimer: Timer?
-    private var levelTimer: Timer?
     /// Accessed on sessionQueue only.
     private var activeQuality: VideoQuality?
 
@@ -158,6 +160,13 @@ final class CameraManager: NSObject, ObservableObject, @unchecked Sendable {
             session.addOutput(movieOutput)
         }
 
+        // Movie output audio channels never update their power levels on
+        // iOS, so meter from the raw sample buffers instead.
+        if session.canAddOutput(audioLevelOutput) {
+            session.addOutput(audioLevelOutput)
+            audioLevelOutput.setSampleBufferDelegate(self, queue: levelQueue)
+        }
+
         applyAudioMode(audioMode)
 
         let options = VideoQuality.candidates.filter { selectFormat(for: $0) != nil }
@@ -177,21 +186,6 @@ final class CameraManager: NSObject, ObservableObject, @unchecked Sendable {
         refreshStabilizationOptions()
         setUpRotationCoordinator(for: camera)
         session.startRunning()
-        startLevelMetering()
-    }
-
-    /// Polls the movie output's audio channels so the UI can show a live mic
-    /// meter — the practical way to spot a covered mic port or clipping.
-    private func startLevelMetering() {
-        DispatchQueue.main.async {
-            self.levelTimer?.invalidate()
-            self.levelTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] _ in
-                guard let self else { return }
-                let channels = self.movieOutput.connection(with: .audio)?.audioChannels ?? []
-                let peakDb = channels.map(\.averagePowerLevel).max() ?? -160
-                self.audioLevel = max(0, min(1, (peakDb + 50) / 50))
-            }
-        }
     }
 
     // MARK: - Audio configuration
@@ -510,6 +504,53 @@ final class CameraManager: NSObject, ObservableObject, @unchecked Sendable {
                 if self.statusMessage == message { self.statusMessage = nil }
             }
         }
+    }
+}
+
+extension CameraManager: AVCaptureAudioDataOutputSampleBufferDelegate {
+    func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection) {
+        guard let formatDescription = CMSampleBufferGetFormatDescription(sampleBuffer),
+              let asbd = CMAudioFormatDescriptionGetStreamBasicDescription(formatDescription)?.pointee,
+              let blockBuffer = CMSampleBufferGetDataBuffer(sampleBuffer) else { return }
+
+        var lengthAtOffset = 0
+        var totalLength = 0
+        var dataPointer: UnsafeMutablePointer<CChar>?
+        guard CMBlockBufferGetDataPointer(blockBuffer, atOffset: 0,
+                                          lengthAtOffsetOut: &lengthAtOffset,
+                                          totalLengthOut: &totalLength,
+                                          dataPointerOut: &dataPointer) == kCMBlockBufferNoErr,
+              let data = dataPointer, totalLength > 0 else { return }
+
+        var sumOfSquares = 0.0
+        var sampleCount = 0
+        if asbd.mFormatFlags & kAudioFormatFlagIsFloat != 0 && asbd.mBitsPerChannel == 32 {
+            sampleCount = totalLength / MemoryLayout<Float32>.size
+            data.withMemoryRebound(to: Float32.self, capacity: sampleCount) { samples in
+                for i in 0..<sampleCount {
+                    let v = Double(samples[i])
+                    sumOfSquares += v * v
+                }
+            }
+        } else if asbd.mBitsPerChannel == 16 {
+            sampleCount = totalLength / MemoryLayout<Int16>.size
+            data.withMemoryRebound(to: Int16.self, capacity: sampleCount) { samples in
+                for i in 0..<sampleCount {
+                    let v = Double(samples[i]) / 32768.0
+                    sumOfSquares += v * v
+                }
+            }
+        }
+        guard sampleCount > 0 else { return }
+
+        let rms = (sumOfSquares / Double(sampleCount)).squareRoot()
+        let db = 20 * log10(max(rms, 1e-8))
+        let normalized = Float(max(0, min(1, (db + 50) / 50)))
+
+        let now = CACurrentMediaTime()
+        guard now - lastLevelPublish > 0.08 else { return }
+        lastLevelPublish = now
+        DispatchQueue.main.async { self.audioLevel = normalized }
     }
 }
 
