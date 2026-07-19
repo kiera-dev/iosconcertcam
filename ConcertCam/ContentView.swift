@@ -96,6 +96,17 @@ struct ContentView: View {
                 Spacer()
                 bottomControls
             }
+
+            // In landscape the wide controls can't rotate in place, so the
+            // whole cluster relocates to whichever edge is "up" for the user.
+            if deviceIsLandscape {
+                GeometryReader { geo in
+                    audioCluster
+                        .rotationEffect(iconRotation)
+                        .position(x: iconRotation.degrees > 0 ? geo.size.width - 80 : 80,
+                                  y: geo.size.height / 2)
+                }
+            }
         }
         .statusBarHidden()
         .onAppear {
@@ -178,6 +189,18 @@ struct ContentView: View {
             }
             .padding(.horizontal, 16)
 
+            if !deviceIsLandscape {
+                audioCluster
+            }
+        }
+        .padding(.top, 8)
+    }
+
+    /// The wide, text-bearing controls: mode picker, caption, mic picker,
+    /// meter, timer, status. Rendered inline in portrait; rotated and
+    /// edge-anchored in landscape.
+    private var audioCluster: some View {
+        VStack(spacing: 6) {
             if camera.isRecording {
                 Label(camera.isPaused ? "PAUSED · \(timeString(camera.recordingSeconds))"
                                       : timeString(camera.recordingSeconds),
@@ -239,7 +262,6 @@ struct ContentView: View {
                     .background(.black.opacity(0.6), in: Capsule())
             }
         }
-        .padding(.top, 8)
     }
 
     /// Live mic level. If this stops moving — or drops when you grip the
@@ -286,6 +308,7 @@ struct ContentView: View {
                 .background(.black.opacity(0.5), in: Capsule())
         }
         .disabled(camera.isRecording || camera.qualityOptions.isEmpty)
+        .rotationEffect(iconRotation)
     }
 
     private var nightModeButton: some View {
