@@ -26,6 +26,9 @@ struct CameraPreview: UIViewRepresentable {
 
 struct ContentView: View {
     @StateObject private var camera = CameraManager()
+    @State private var focusPoint: CGPoint?
+    @State private var focusBoxVisible = false
+    @State private var pinchBaseZoom: CGFloat?
 
     var body: some View {
         ZStack {
@@ -34,11 +37,25 @@ struct ContentView: View {
             if camera.isAuthorized {
                 CameraPreview(layer: camera.previewLayer)
                     .ignoresSafeArea()
+                    .gesture(pinchToZoom)
+                    .onTapGesture(count: 1, coordinateSpace: .local) { location in
+                        camera.focusAndExpose(atLayerPoint: location)
+                        showFocusBox(at: location)
+                    }
             } else {
                 Text("Camera and microphone access are required.\nEnable them in Settings.")
                     .multilineTextAlignment(.center)
                     .foregroundStyle(.white)
                     .padding()
+            }
+
+            if let point = focusPoint, focusBoxVisible {
+                RoundedRectangle(cornerRadius: 4)
+                    .strokeBorder(.yellow, lineWidth: 1.5)
+                    .frame(width: 72, height: 72)
+                    .position(point)
+                    .transition(.scale(scale: 1.4).combined(with: .opacity))
+                    .allowsHitTesting(false)
             }
 
             VStack {
@@ -51,8 +68,37 @@ struct ContentView: View {
         .onAppear { camera.start() }
     }
 
+    // MARK: - Gestures
+
+    private var pinchToZoom: some Gesture {
+        MagnificationGesture()
+            .onChanged { value in
+                let base = pinchBaseZoom ?? camera.zoomFactor
+                if pinchBaseZoom == nil { pinchBaseZoom = base }
+                camera.setZoom(base * value)
+            }
+            .onEnded { _ in pinchBaseZoom = nil }
+    }
+
+    private func showFocusBox(at point: CGPoint) {
+        focusPoint = point
+        withAnimation(.easeOut(duration: 0.2)) { focusBoxVisible = true }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.9) {
+            withAnimation(.easeOut(duration: 0.3)) { focusBoxVisible = false }
+        }
+    }
+
+    // MARK: - Top bar
+
     private var topBar: some View {
         VStack(spacing: 6) {
+            HStack {
+                qualityMenu
+                Spacer()
+                nightModeButton
+            }
+            .padding(.horizontal, 16)
+
             if camera.isRecording {
                 Label(timeString(camera.recordingSeconds), systemImage: "record.circle")
                     .font(.system(.headline, design: .monospaced))
@@ -89,15 +135,63 @@ struct ContentView: View {
         .padding(.top, 8)
     }
 
+    private var qualityMenu: some View {
+        Menu {
+            ForEach(camera.qualityOptions) { option in
+                Button {
+                    camera.setQuality(option)
+                } label: {
+                    if option == camera.quality {
+                        Label(option.label, systemImage: "checkmark")
+                    } else {
+                        Text(option.label)
+                    }
+                }
+            }
+        } label: {
+            Text(camera.quality?.label ?? "—")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.white)
+                .padding(.horizontal, 10).padding(.vertical, 6)
+                .background(.black.opacity(0.5), in: Capsule())
+        }
+        .disabled(camera.isRecording || camera.qualityOptions.isEmpty)
+    }
+
+    private var nightModeButton: some View {
+        Button {
+            camera.setNightMode(!camera.isNightModeOn)
+        } label: {
+            Image(systemName: camera.isNightModeOn ? "moon.stars.fill" : "moon.stars")
+                .font(.system(size: 17, weight: .semibold))
+                .foregroundStyle(camera.isNightModeOn ? .yellow : .white)
+                .frame(width: 36, height: 36)
+                .background(.black.opacity(0.5), in: Circle())
+        }
+        .disabled(!camera.isNightModeSupported || camera.isRecording)
+        .opacity(camera.isNightModeSupported ? 1 : 0.35)
+    }
+
+    // MARK: - Bottom controls
+
     private var bottomControls: some View {
         VStack(spacing: 16) {
-            if camera.maxZoom > 1 {
-                Slider(value: Binding(
-                    get: { camera.zoomFactor },
-                    set: { camera.setZoom($0) }
-                ), in: 1...camera.maxZoom)
-                .frame(maxWidth: 260)
-                .tint(.white)
+            if camera.zoomPresets.count > 1 {
+                HStack(spacing: 10) {
+                    ForEach(camera.zoomPresets) { preset in
+                        let isActive = preset == activePreset
+                        Button {
+                            camera.selectZoomPreset(preset)
+                        } label: {
+                            Text(preset.label)
+                                .font(.system(size: isActive ? 14 : 12, weight: .bold, design: .rounded))
+                                .foregroundStyle(isActive ? .yellow : .white)
+                                .frame(width: isActive ? 40 : 34, height: isActive ? 40 : 34)
+                                .background(.black.opacity(0.5), in: Circle())
+                        }
+                    }
+                }
+                .animation(.easeOut(duration: 0.15), value: camera.zoomFactor)
             }
 
             Button(action: camera.toggleRecording) {
@@ -115,6 +209,12 @@ struct ContentView: View {
             .disabled(!camera.isAuthorized)
         }
         .padding(.bottom, 24)
+    }
+
+    /// The preset whose range contains the current zoom factor.
+    private var activePreset: ZoomPreset? {
+        camera.zoomPresets.last { $0.factor <= camera.zoomFactor + 0.01 }
+            ?? camera.zoomPresets.first
     }
 
     private func timeString(_ seconds: Int) -> String {

@@ -22,6 +22,28 @@ enum AudioMode: String, CaseIterable, Identifiable {
     }
 }
 
+struct VideoQuality: Equatable, Identifiable {
+    let width: Int32
+    let height: Int32
+    let fps: Int
+
+    var id: String { "\(width)x\(height)@\(fps)" }
+    var label: String { "\(height == 2160 ? "4K" : "1080p") · \(fps)" }
+
+    static let candidates: [VideoQuality] = [
+        VideoQuality(width: 1920, height: 1080, fps: 30),
+        VideoQuality(width: 1920, height: 1080, fps: 60),
+        VideoQuality(width: 3840, height: 2160, fps: 30),
+        VideoQuality(width: 3840, height: 2160, fps: 60),
+    ]
+}
+
+struct ZoomPreset: Equatable, Identifiable {
+    let factor: CGFloat
+    let label: String
+    var id: CGFloat { factor }
+}
+
 // @unchecked Sendable: all mutable state is confined to sessionQueue or the
 // main queue; @Published properties are only written via DispatchQueue.main.
 final class CameraManager: NSObject, ObservableObject, @unchecked Sendable {
@@ -30,7 +52,12 @@ final class CameraManager: NSObject, ObservableObject, @unchecked Sendable {
     @Published var recordingSeconds = 0
     @Published var zoomFactor: CGFloat = 1.0
     @Published var maxZoom: CGFloat = 1.0
+    @Published var zoomPresets: [ZoomPreset] = []
     @Published var audioMode: AudioMode = .stereo
+    @Published var qualityOptions: [VideoQuality] = []
+    @Published var quality: VideoQuality?
+    @Published var isNightModeOn = false
+    @Published var isNightModeSupported = false
     @Published var statusMessage: String?
 
     let session = AVCaptureSession()
@@ -43,22 +70,28 @@ final class CameraManager: NSObject, ObservableObject, @unchecked Sendable {
     private var rotationCoordinator: AVCaptureDevice.RotationCoordinator?
     private var rotationObservation: NSKeyValueObservation?
     private var recordingTimer: Timer?
+    /// Accessed on sessionQueue only.
+    private var activeQuality: VideoQuality?
 
     override init() {
         super.init()
         previewLayer.session = session
         previewLayer.videoGravity = .resizeAspectFill
+        if let saved = UserDefaults.standard.string(forKey: "audioMode"),
+           let mode = AudioMode(rawValue: saved) {
+            audioMode = mode
+        }
     }
 
     // MARK: - Setup
 
     func start() {
-        Task {
-            let cameraOK = await AVCaptureDevice.requestAccess(for: .video)
-            let micOK = await AVCaptureDevice.requestAccess(for: .audio)
-            await MainActor.run { self.isAuthorized = cameraOK && micOK }
-            guard cameraOK && micOK else { return }
-            sessionQueue.async { self.configureSession() }
+        AVCaptureDevice.requestAccess(for: .video) { cameraOK in
+            AVCaptureDevice.requestAccess(for: .audio) { micOK in
+                DispatchQueue.main.async { self.isAuthorized = cameraOK && micOK }
+                guard cameraOK && micOK else { return }
+                self.sessionQueue.async { self.configureSession() }
+            }
         }
     }
 
@@ -97,11 +130,21 @@ final class CameraManager: NSObject, ObservableObject, @unchecked Sendable {
         }
 
         applyAudioMode(audioMode)
+
+        let options = VideoQuality.candidates.filter { selectFormat(for: $0) != nil }
+        let savedID = UserDefaults.standard.string(forKey: "videoQuality")
+        let selected = options.first { $0.id == savedID }
+            ?? options.first { $0.id == "1920x1080@30" }
+            ?? options.first
+        DispatchQueue.main.async {
+            self.qualityOptions = options
+            self.quality = selected
+        }
+        if let selected { applyQuality(selected) }
+
         session.commitConfiguration()
 
-        let maxUseful = min(camera.activeFormat.videoMaxZoomFactor, 16)
-        DispatchQueue.main.async { self.maxZoom = maxUseful }
-
+        refreshZoomCaps()
         setUpRotationCoordinator(for: camera)
         session.startRunning()
     }
@@ -111,6 +154,7 @@ final class CameraManager: NSObject, ObservableObject, @unchecked Sendable {
     func setAudioMode(_ mode: AudioMode) {
         guard !isRecording else { return }
         audioMode = mode
+        UserDefaults.standard.set(mode.rawValue, forKey: "audioMode")
         // Restart the session around the switch: changing the AVAudioSession
         // category/mode under a running capture session can silently kill
         // audio capture, and automaticallyConfiguresApplicationAudioSession
@@ -159,6 +203,83 @@ final class CameraManager: NSObject, ObservableObject, @unchecked Sendable {
         }
     }
 
+    // MARK: - Video quality
+
+    func setQuality(_ newQuality: VideoQuality) {
+        guard !isRecording else { return }
+        quality = newQuality
+        UserDefaults.standard.set(newQuality.id, forKey: "videoQuality")
+        sessionQueue.async {
+            self.applyQuality(newQuality)
+            self.refreshZoomCaps()
+        }
+    }
+
+    private func selectFormat(for quality: VideoQuality) -> AVCaptureDevice.Format? {
+        guard let device = videoDevice else { return nil }
+        let matches = device.formats.filter { format in
+            let dims = CMVideoFormatDescriptionGetDimensions(format.formatDescription)
+            guard dims.width == quality.width && dims.height == quality.height else { return false }
+            return format.videoSupportedFrameRateRanges.contains {
+                $0.minFrameRate <= Double(quality.fps) && Double(quality.fps) <= $0.maxFrameRate
+            }
+        }
+        // Prefer a format that can do low-light auto frame rate (night mode).
+        return matches.first { $0.isAutoVideoFrameRateSupported } ?? matches.first
+    }
+
+    private func applyQuality(_ quality: VideoQuality) {
+        guard let device = videoDevice, let format = selectFormat(for: quality) else { return }
+        session.beginConfiguration()
+        do {
+            try device.lockForConfiguration()
+            device.activeFormat = format
+            let duration = CMTime(value: 1, timescale: CMTimeScale(quality.fps))
+            device.activeVideoMinFrameDuration = duration
+            device.activeVideoMaxFrameDuration = duration
+            device.unlockForConfiguration()
+        } catch {
+            report("Couldn't apply \(quality.label): \(error.localizedDescription)")
+        }
+        session.commitConfiguration()
+        activeQuality = quality
+
+        // Auto frame rate resets when the format changes.
+        let nightSupported = format.isAutoVideoFrameRateSupported
+        DispatchQueue.main.async {
+            self.isNightModeSupported = nightSupported
+            self.isNightModeOn = false
+        }
+    }
+
+    // MARK: - Night mode (low-light auto frame rate)
+
+    func setNightMode(_ on: Bool) {
+        guard !isRecording else { return }
+        sessionQueue.async {
+            guard let device = self.videoDevice,
+                  device.activeFormat.isAutoVideoFrameRateSupported else { return }
+            do {
+                try device.lockForConfiguration()
+                if on {
+                    // Auto frame rate requires default frame durations.
+                    device.activeVideoMinFrameDuration = .invalid
+                    device.activeVideoMaxFrameDuration = .invalid
+                    device.isAutoVideoFrameRateEnabled = true
+                } else {
+                    device.isAutoVideoFrameRateEnabled = false
+                    if let quality = self.activeQuality {
+                        let duration = CMTime(value: 1, timescale: CMTimeScale(quality.fps))
+                        device.activeVideoMinFrameDuration = duration
+                        device.activeVideoMaxFrameDuration = duration
+                    }
+                }
+                device.unlockForConfiguration()
+                DispatchQueue.main.async { self.isNightModeOn = on }
+            } catch {}
+        }
+    }
+
     // MARK: - Rotation
 
     private func setUpRotationCoordinator(for device: AVCaptureDevice) {
@@ -173,16 +294,87 @@ final class CameraManager: NSObject, ObservableObject, @unchecked Sendable {
         }
     }
 
+    // MARK: - Focus & exposure
+
+    func focusAndExpose(atLayerPoint point: CGPoint) {
+        let devicePoint = previewLayer.captureDevicePointConverted(fromLayerPoint: point)
+        sessionQueue.async {
+            guard let device = self.videoDevice else { return }
+            do {
+                try device.lockForConfiguration()
+                if device.isFocusPointOfInterestSupported {
+                    device.focusPointOfInterest = devicePoint
+                }
+                if device.isFocusModeSupported(.continuousAutoFocus) {
+                    device.focusMode = .continuousAutoFocus
+                }
+                if device.isExposurePointOfInterestSupported {
+                    device.exposurePointOfInterest = devicePoint
+                }
+                if device.isExposureModeSupported(.continuousAutoExposure) {
+                    device.exposureMode = .continuousAutoExposure
+                }
+                device.unlockForConfiguration()
+            } catch {}
+        }
+    }
+
     // MARK: - Zoom
 
+    private func refreshZoomCaps() {
+        guard let device = videoDevice else { return }
+        let multiplier = device.displayVideoZoomFactorMultiplier
+        let maxUseful = min(device.activeFormat.videoMaxZoomFactor, 16)
+
+        var factors: [CGFloat] = [1.0]
+        factors += device.virtualDeviceSwitchOverVideoZoomFactors.map { CGFloat(truncating: $0) }
+        // Add a displayed-2x digital preset if no lens lands there (stock camera does this).
+        let twoX = 2.0 / multiplier
+        if twoX <= maxUseful && !factors.contains(where: { abs($0 * multiplier - 2.0) < 0.01 }) {
+            factors.append(twoX)
+        }
+
+        let presets = factors.filter { $0 <= maxUseful }.sorted().map { factor -> ZoomPreset in
+            let display = factor * multiplier
+            let label: String
+            if abs(display.rounded() - display) < 0.01 {
+                label = "\(Int(display.rounded()))x"
+            } else {
+                label = String(format: "%.1fx", display)
+            }
+            return ZoomPreset(factor: factor, label: label)
+        }
+
+        DispatchQueue.main.async {
+            self.maxZoom = maxUseful
+            self.zoomPresets = presets
+            self.zoomFactor = min(max(self.zoomFactor, 1), maxUseful)
+        }
+    }
+
+    /// Immediate zoom, for pinch gestures.
     func setZoom(_ factor: CGFloat) {
-        zoomFactor = factor
+        let clamped = min(max(factor, 1), maxZoom)
+        zoomFactor = clamped
         sessionQueue.async {
             guard let device = self.videoDevice else { return }
             do {
                 try device.lockForConfiguration()
                 device.videoZoomFactor = max(device.minAvailableVideoZoomFactor,
-                                             min(factor, device.maxAvailableVideoZoomFactor))
+                                             min(clamped, device.maxAvailableVideoZoomFactor))
+                device.unlockForConfiguration()
+            } catch {}
+        }
+    }
+
+    /// Smooth ramp, for preset buttons.
+    func selectZoomPreset(_ preset: ZoomPreset) {
+        zoomFactor = preset.factor
+        sessionQueue.async {
+            guard let device = self.videoDevice else { return }
+            do {
+                try device.lockForConfiguration()
+                device.ramp(toVideoZoomFactor: preset.factor, withRate: 8)
                 device.unlockForConfiguration()
             } catch {}
         }
